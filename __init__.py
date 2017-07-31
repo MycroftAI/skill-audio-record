@@ -21,7 +21,8 @@ import time
 
 import psutil as psutil
 from adapt.intent import IntentBuilder
-from os.path import dirname
+from os.path import dirname, exists
+import os
 
 from mycroft.skills.scheduled_skills import ScheduledSkill
 from mycroft.util import record, play_wav
@@ -67,6 +68,11 @@ class AudioRecordSkill(ScheduledSkill):
             'AudioRecordSkillKeyword').build()
         self.register_intent(intent, self.handle_stop_play)
 
+        intent = IntentBuilder('AudioRecordSkillDeleteIntent') \
+            .require('AudioRecordSkillDeleteVerb') \
+            .require('AudioRecordSkillKeyword').build()
+        self.register_intent(intent, self.handle_delete)
+
     def handle_record(self, message):
         utterance = message.data.get('utterance')
         date = self.get_utc_time(utterance)
@@ -110,6 +116,16 @@ class AudioRecordSkill(ScheduledSkill):
             self.record_process = None
             self.cancel()
 
+    def handle_delete(self, message):
+        if not exists(self.file_path):
+            self.speak_dialog('audio.record.no.recording')
+        else:
+            try:
+                os.remove(self.file_path)
+                self.speak_dialog('audio.record.removed')
+            except:
+                pass
+
     @staticmethod
     def stop_process(process):
         if process.poll() is None:
@@ -132,7 +148,10 @@ class AudioRecordSkill(ScheduledSkill):
             self.handle_stop(None)
 
     def handle_play(self, message):
-        self.play_process = play_wav(self.file_path)
+        if exists(self.file_path):
+            self.play_process = play_wav(self.file_path)
+        else:
+            self.speak_dialog('audio.record.no.recording')
 
     def handle_stop_play(self, message):
         self.speak_dialog('audio.record.stop.play')
