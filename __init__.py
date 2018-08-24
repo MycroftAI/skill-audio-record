@@ -20,20 +20,19 @@ import math
 import time
 
 import psutil as psutil
-from adapt.intent import IntentBuilder
 from os.path import dirname, exists
 import os
 
-from mycroft.skills.scheduled_skills import ScheduledSkill
+from mycroft import (MycroftSkill, intent_handler, AdaptIntent,
+        intent_file_handler)
 from mycroft.util import record, play_wav
-from mycroft.util.log import getLogger
+from mycroft.util.log import LOG
 
-__author__ = 'jdorleans'
+from mycroft.util.parse import extract_datetime
+from mycroft.util.time import now_local
 
-LOGGER = getLogger(__name__)
 
-
-class AudioRecordSkill(ScheduledSkill):
+class AudioRecordSkill(MycroftSkill):
     def __init__(self):
         super(AudioRecordSkill, self).__init__("AudioRecordSkill")
         self.free_disk = self.config.get('free_disk')
@@ -47,52 +46,21 @@ class AudioRecordSkill(ScheduledSkill):
         self.play_process = None
         self.record_process = None
 
-    def initialize(self):
-        intent = IntentBuilder("AudioRecordSkillIntent").require(
-            "AudioRecordSkillKeyword").build()
-        self.register_intent(intent, self.handle_record)
-
-        intent = IntentBuilder('AudioRecordSkillStopIntent').require(
-            'AudioRecordSkillStopVerb') \
-            .require('AudioRecordSkillKeyword').build()
-        self.register_intent(intent, self.handle_stop)
-
-        intent = IntentBuilder('AudioRecordSkillPlayIntent').require(
-            'AudioRecordSkillPlayVerb') \
-            .require('AudioRecordSkillKeyword').build()
-        self.register_intent(intent, self.handle_play)
-
-        intent = IntentBuilder('AudioRecordSkillStopPlayIntent').require(
-            'AudioRecordSkillStopVerb') \
-            .require('AudioRecordSkillPlayVerb').require(
-            'AudioRecordSkillKeyword').build()
-        self.register_intent(intent, self.handle_stop_play)
-
-        intent = IntentBuilder('AudioRecordSkillDeleteIntent') \
-            .require('AudioRecordSkillDeleteVerb') \
-            .require('AudioRecordSkillKeyword').build()
-        self.register_intent(intent, self.handle_delete)
-
+    @intent_handler(AdaptIntent("AudioRecordSkillIntent").require("AudioRecordSkillKeyword"))
     def handle_record(self, message):
         utterance = message.data.get('utterance')
-        date = self.get_utc_time(utterance)
-        now = self.get_utc_time()
-        self.duration = self.get_duration(date, now)
+        now = now_local()
+        stop_time, _ = extract_datetime(utterance, lang=self.lang)
+        duration = (stop_time - now).total_seconds()
         if self.is_free_disk_space():
-            self.notify_time = now
             self.feedback_start()
             time.sleep(3)
             self.record_process = record(
-                self.file_path, self.duration, self.rate, self.channels)
-            self.schedule()
+                self.file_path, int(duration), self.rate, self.channels)
+            self.schedule_repeating_event(self.notify, now,
+                                          self.notify_delay, name='notify')
         else:
             self.speak_dialog("audio.record.disk.full")
-
-    def get_duration(self, date, now):
-        duration = math.ceil(date - now)
-        if duration <= 0:
-            duration = self.max_time
-        return int(duration)
 
     def is_free_disk_space(self):
         space = self.duration * self.channels * self.rate / 1024 / 1024
@@ -109,13 +77,19 @@ class AudioRecordSkill(ScheduledSkill):
         else:
             self.speak_dialog('audio.record.start')
 
+    @intent_handler(AdaptIntent('AudioRecordSkillStopIntent').require(
+        'AudioRecordSkillStopVerb') \
+        .require('AudioRecordSkillKeyword'))
     def handle_stop(self, message):
         self.speak_dialog('audio.record.stop')
+        self.cancel_scheduled_event('notify')
         if self.record_process:
             self.stop_process(self.record_process)
             self.record_process = None
-            self.cancel()
 
+    @intent_handler(AdaptIntent('AudioRecordSkillDeleteIntent') \
+        .require('AudioRecordSkillDeleteVerb') \
+        .require('AudioRecordSkillKeyword'))
     def handle_delete(self, message):
         if not exists(self.file_path):
             self.speak_dialog('audio.record.no.recording')
@@ -132,38 +106,40 @@ class AudioRecordSkill(ScheduledSkill):
             process.terminate()
             process.wait()
 
-    def get_times(self):
-        return [self.notify_time]
-
     def notify(self, timestamp):
         if self.record_process and self.record_process.poll() is None:
             if self.is_free_disk_space():
-                LOGGER.info("Recording...")
-                self.notify_time = self.get_utc_time() + self.notify_delay
-                self.schedule()
+                LOG.info("Recording...")
             else:
                 self.handle_stop(None)
                 self.speak_dialog("audio.record.disk.full")
         else:
             self.handle_stop(None)
 
+    @intent_file_handler('PlayRecording.intent')
     def handle_play(self, message):
         if exists(self.file_path):
             self.play_process = play_wav(self.file_path)
         else:
             self.speak_dialog('audio.record.no.recording')
 
+    @intent_handler(AdaptIntent('AudioRecordSkillStopPlayIntent').require(
+        'AudioRecordSkillStopVerb') \
+        .require('AudioRecordSkillPlayVerb').require('AudioRecordSkillKeyword')
+        )
     def handle_stop_play(self, message):
         self.speak_dialog('audio.record.stop.play')
         if self.play_process:
             self.stop()
             self.play_process = None
+            return True
+        return False
 
     def stop(self):
         if self.play_process:
-            self.stop_process(self.play_process)
+            return self.stop_process(self.play_process)
         if self.record_process:
-            self.stop_process(self.record_process)
+            return self.stop_process(self.record_process)
 
 
 def create_skill():
