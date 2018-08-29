@@ -1,0 +1,4 @@
+start recording
+record (me|) (for|until) {time}
+start recording (me|audio|) for {time}
+record (audio|me)

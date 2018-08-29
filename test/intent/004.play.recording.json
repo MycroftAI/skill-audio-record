@@ -1,4 +1,4 @@
 {
-  "utterance": "play record",
+  "utterance": "play recording",
   "intent_type": "PlayRecording.intent"
 }

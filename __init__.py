@@ -12,19 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-import math
+import os
 import time
-
 import psutil as psutil
 from os.path import dirname, exists
-import os
 
-from mycroft import (MycroftSkill, intent_handler, AdaptIntent,
-        intent_file_handler)
+from adapt.intent import IntentBuilder
+from mycroft import MycroftSkill, intent_handler, intent_file_handler
+from mycroft.audio import wait_while_speaking, is_speaking
 from mycroft.util import record, play_wav
-from mycroft.util.log import LOG
-
 from mycroft.util.parse import extract_datetime
 from mycroft.util.time import now_local
 
@@ -32,112 +28,267 @@ from mycroft.util.time import now_local
 class AudioRecordSkill(MycroftSkill):
     def __init__(self):
         super(AudioRecordSkill, self).__init__("AudioRecordSkill")
-        self.free_disk = self.config.get('free_disk')
-        self.max_time = self.config.get('max_time')
-        self.notify_delay = self.config.get('notify_delay')
-        self.rate = self.config.get('rate')
-        self.channels = self.config.get('channels')
-        self.file_path = self.config.get('filename')
-        self.duration = 0
-        self.notify_time = None
         self.play_process = None
         self.record_process = None
+        self.start_time = 0
+        self.last_index = 24  # index of last pixel in countdowns
 
-    @intent_handler(AdaptIntent("AudioRecordSkillIntent").require("AudioRecordSkillKeyword"))
-    def handle_record(self, message):
-        utterance = message.data.get('utterance')
-        now = now_local()
-        stop_time, _ = extract_datetime(utterance, lang=self.lang)
-        duration = (stop_time - now).total_seconds()
-        if self.is_free_disk_space():
-            self.feedback_start()
-            time.sleep(3)
-            self.record_process = record(
-                self.file_path, int(duration), self.rate, self.channels)
-            self.schedule_repeating_event(self.notify, now,
-                                          self.notify_delay, name='notify')
-        else:
-            self.speak_dialog("audio.record.disk.full")
+        self.settings["min_free_disk"] = 100  # min mb to leave free on disk
+        self.settings["rate"] = 16000  # sample rate, hertz
+        self.settings["channels"] = 1  # recording channels (1 = mono)
+        self.settings["file_path"] = "/tmp/mycroft-recording.wav"
+        self.settings["duration"] = -1  # default = unknown
 
-    def is_free_disk_space(self):
-        space = self.duration * self.channels * self.rate / 1024 / 1024
+    def remaining_time(self):
+        return self.settings["duration"] - (now_local() -
+                                            self.start_time).total_seconds()
+
+    def has_free_disk_space(self):
+        space = (self.remaining_time() * self.settings["channels"] *
+                 self.settings["rate"] / 1024 / 1024)
         free_mb = psutil.disk_usage('/')[2] / 1024 / 1024
-        if free_mb - space > self.free_disk:
+        return free_mb - space > self.settings["min_free_disk"]
+
+    @staticmethod
+    def stop_process(process):
+        if process.poll() is None:  # None means still running
+            process.terminate()
+            # No good reason to wait, plus it interferes with
+            # how stop button on the Mark 1 operates.
+            # process.wait()
             return True
         else:
             return False
 
-    def feedback_start(self):
-        if self.duration > 0:
-            self.speak_dialog(
-                'audio.record.start.duration', {'duration': self.duration})
-        else:
-            self.speak_dialog('audio.record.start')
-
-    @intent_handler(AdaptIntent('AudioRecordSkillStopIntent').require(
-        'AudioRecordSkillStopVerb') \
-        .require('AudioRecordSkillKeyword'))
-    def handle_stop(self, message):
-        self.speak_dialog('audio.record.stop')
-        self.cancel_scheduled_event('notify')
-        if self.record_process:
-            self.stop_process(self.record_process)
-            self.record_process = None
-
-    @intent_handler(AdaptIntent('AudioRecordSkillDeleteIntent') \
-        .require('AudioRecordSkillDeleteVerb') \
-        .require('AudioRecordSkillKeyword'))
+    # Handle: "Delete recording"
+    @intent_handler(IntentBuilder('').require('Delete').require('Recording'))
     def handle_delete(self, message):
-        if not exists(self.file_path):
+        if not exists(self.settings["file_path"]):
             self.speak_dialog('audio.record.no.recording')
         else:
             try:
-                os.remove(self.file_path)
+                os.remove(self.settings["file_path"])
                 self.speak_dialog('audio.record.removed')
             except:
                 pass
 
-    @staticmethod
-    def stop_process(process):
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
-
-    def notify(self, timestamp):
-        if self.record_process and self.record_process.poll() is None:
-            if self.is_free_disk_space():
-                LOG.info("Recording...")
-            else:
-                self.handle_stop(None)
-                self.speak_dialog("audio.record.disk.full")
-        else:
-            self.handle_stop(None)
-
-    @intent_file_handler('PlayRecording.intent')
-    def handle_play(self, message):
-        if exists(self.file_path):
-            self.play_process = play_wav(self.file_path)
-        else:
-            self.speak_dialog('audio.record.no.recording')
-
-    @intent_handler(AdaptIntent('AudioRecordSkillStopPlayIntent').require(
-        'AudioRecordSkillStopVerb') \
-        .require('AudioRecordSkillPlayVerb').require('AudioRecordSkillKeyword')
-        )
-    def handle_stop_play(self, message):
-        self.speak_dialog('audio.record.stop.play')
+    # Standard Stop handler
+    def stop(self):
+        if self.record_process:
+            self.end_recording()
+            return True
         if self.play_process:
-            self.stop()
-            self.play_process = None
+            self.end_playback()
             return True
         return False
 
-    def stop(self):
-        if self.play_process:
-            return self.stop_process(self.play_process)
+    # Show a countdown using the eyes
+    def render_countdown(self, r_fore, g_fore, b_fore):
+        display_owner = self.enclosure.display_manager.get_active()
+        if display_owner == "":
+            # Initialization, first time we take ownership
+            self.enclosure.mouth_reset()  # clear any leftover bits
+            self.enclosure.eyes_color(r_fore, g_fore, b_fore)  # foreground
+            self.last_index = 24
+
+        if display_owner == "AudioRecordSkill":
+            remaining_pct = self.remaining_time() / self.settings["duration"]
+            fill_to_index = int(24 * remaining_pct)
+            while self.last_index > fill_to_index:
+                if self.last_index < 24 and self.last_index > -1:
+                    # fill background with gray
+                    self.enclosure.eyes_setpixel(self.last_index, 64, 64, 64)
+                self.last_index -= 1
+
+    ######################################################################
+    # Recording
+
+    @intent_file_handler('StartRecording.intent')
+    def handle_record(self, message):
+        utterance = message.data.get('utterance')
+
+        # Calculate how long to record
+        self.start_time = now_local()
+        stop_time, _ = extract_datetime(utterance, lang=self.lang)
+        self.settings["duration"] = (stop_time -
+                                     self.start_time).total_seconds()
+        if self.settings["duration"] <= 0:
+            self.settings["duration"] = 60  # default recording duration
+
+        # Throw away any previous recording
+        try:
+            os.remove(self.settings["file_path"])
+        except:
+            pass
+
+        if self.has_free_disk_space():
+            record_for = nice_duration(self, self.settings["duration"],
+                                       lang=self.lang)
+            self.speak_dialog('audio.record.start.duration',
+                              {'duration': record_for})
+
+            # Initiate recording
+            wait_while_speaking()
+            self.start_time = now_local()   # recalc after speaking completes
+            self.record_process = record(self.settings["file_path"],
+                                         int(self.settings["duration"]),
+                                         self.settings["rate"],
+                                         self.settings["channels"])
+            self.enclosure.eyes_color(255, 0, 0)  # set color red
+            self.last_index = 24
+            self.schedule_repeating_event(self.recording_feedback, None, 1,
+                                          name='RecordingFeedback')
+        else:
+            self.speak_dialog("audio.record.disk.full")
+
+    def recording_feedback(self, message):
+        if not self.record_process:
+            self.end_recording()
+            return
+
+        # Show recording countdown
+        self.render_countdown(255, 0, 0)
+
+        # Verify there is still adequate disk space to continue recording
+        if self.record_process.poll() is None:
+            if not self.has_free_disk_space():
+                # Out of space
+                self.end_recording()
+                self.speak_dialog("audio.record.disk.full")
+        else:
+            # Recording ended for some reason
+            self.end_recording()
+
+    def end_recording(self):
+        self.cancel_scheduled_event('RecordingFeedback')
+
         if self.record_process:
-            return self.stop_process(self.record_process)
+            # Stop recording
+            self.stop_process(self.record_process)
+            self.record_process = None
+            # Calc actual recording duration
+            self.settings["duration"] = (now_local() -
+                                         self.start_time).total_seconds()
+
+        # TODO: Post "reset color" message
+        self.enclosure.eyes_color(0, 128, 128)  # set back to default color
+
+    ######################################################################
+    # Playback
+
+    @intent_file_handler('PlayRecording.intent')
+    def handle_play(self, message):
+        if exists(self.settings["file_path"]):
+            # Initialize for playback
+            self.start_time = now_local()
+
+            # Playback the recording, with visual countdown
+            self.play_process = play_wav(self.settings["file_path"])
+            self.enclosure.eyes_color(64, 255, 64)  # set color greenish
+            self.last_index = 24
+            self.schedule_repeating_event(self.playback_feedback, None, 1,
+                                          name='PlaybackFeedback')
+        else:
+            self.speak_dialog('audio.record.no.recording')
+
+    def playback_feedback(self, message):
+        if not self.play_process or self.play_process.poll() is not None:
+            self.end_playback()
+            return
+
+        if self.settings["duration"] > -1:
+            # Show playback countdown
+            self.render_countdown(64, 255, 64)   # greenish color
+        else:
+            # unknown duration, can't display countdown
+            pass
+
+    def end_playback(self):
+        self.cancel_scheduled_event('PlaybackFeedback')
+        if self.play_process:
+            self.stop_process(self.play_process)
+            self.play_process = None
+        self.enclosure.eyes_color(0, 128, 128)  # set back to default
 
 
 def create_skill():
     return AudioRecordSkill()
+
+
+##########################################################################
+# TODO: Move to mycroft.util.format
+from mycroft.util.format import pronounce_number
+
+
+def nice_duration(self, duration, lang="en-us", speech=True):
+    """ Convert duration in seconds to a nice spoken timespan
+
+    Examples:
+       duration = 60  ->  "1:00" or "one minute"
+       duration = 163  ->  "2:43" or "two minutes forty three seconds"
+
+    Args:
+        duration: time, in seconds
+        speech (bool): format for speech (True) or display (False)
+    Returns:
+        str: timespan as a string
+    """
+
+    # Do traditional rounding: 2.5->3, 3.5->4, plus this
+    # helps in a few cases of where calculations generate
+    # times like 2:59:59.9 instead of 3:00.
+    duration += 0.5
+
+    days = int(duration // 86400)
+    hours = int(duration // 3600 % 24)
+    minutes = int(duration // 60 % 60)
+    seconds = int(duration % 60)
+
+    if speech:
+        out = ""
+        if days > 0:
+            out += pronounce_number(days, lang) + " "
+            if days == 1:
+                out += self.translate("day")
+            else:
+                out += self.translate("days")
+            out += " "
+        if hours > 0:
+            if out:
+                out += " "
+            out += pronounce_number(hours, lang) + " "
+            if hours == 1:
+                out += self.translate("hour")
+            else:
+                out += self.translate("hours")
+        if minutes > 0:
+            if out:
+                out += " "
+            out += pronounce_number(minutes, lang) + " "
+            if minutes == 1:
+                out += self.translate("minute")
+            else:
+                out += self.translate("minutes")
+        if seconds > 0:
+            if out:
+                out += " "
+            out += pronounce_number(seconds, lang) + " "
+            if seconds == 1:
+                out += self.translate("second")
+            else:
+                out += self.translate("seconds")
+    else:
+        # M:SS, MM:SS, H:MM:SS, Dd H:MM:SS format
+        out = ""
+        if days > 0:
+            out = str(days) + "d "
+        if hours > 0 or days > 0:
+            out += str(hours) + ":"
+        if minutes < 10 and (hours > 0 or days > 0):
+            out += "0"
+        out += str(minutes)+":"
+        if seconds < 10:
+            out += "0"
+        out += str(seconds)
+
+    return out
