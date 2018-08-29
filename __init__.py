@@ -20,10 +20,10 @@ from os.path import dirname, exists
 from adapt.intent import IntentBuilder
 from mycroft import MycroftSkill, intent_handler, intent_file_handler
 from mycroft.audio import wait_while_speaking, is_speaking
+from mycroft.messagebus.message import Message
 from mycroft.util import record, play_wav
 from mycroft.util.parse import extract_datetime
 from mycroft.util.time import now_local
-
 
 class AudioRecordSkill(MycroftSkill):
     def __init__(self):
@@ -170,8 +170,9 @@ class AudioRecordSkill(MycroftSkill):
             self.settings["duration"] = (now_local() -
                                          self.start_time).total_seconds()
 
-        # TODO: Post "reset color" message
-        self.enclosure.eyes_color(0, 128, 128)  # set back to default color
+        # Reset eyes
+        self.enclosure.eyes_color(34, 167, 240)  # Mycroft blue
+        self.bus.emit(Message('mycroft.eyes.default'))
 
     ######################################################################
     # Playback
@@ -208,7 +209,10 @@ class AudioRecordSkill(MycroftSkill):
         if self.play_process:
             self.stop_process(self.play_process)
             self.play_process = None
-        self.enclosure.eyes_color(0, 128, 128)  # set back to default
+
+        # Reset eyes
+        self.enclosure.eyes_color(34, 167, 240)  # Mycroft blue
+        self.bus.emit(Message('mycroft.eyes.default'))
 
 
 def create_skill():
