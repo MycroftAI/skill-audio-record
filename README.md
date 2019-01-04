@@ -1,4 +1,4 @@
-# <img src='https://rawgit.com/FortAwesome/Font-Awesome/master/advanced-options/raw-svg/solid/microphone.svg' card_color='#22a7f0' width='50' height='50' style='vertical-align:bottom'/> Audio Recorder
+# <img src='https://rawgit.com/FortAwesome/Font-Awesome/master/svgs/solid/microphone.svg' card_color='#22a7f0' width='50' height='50' style='vertical-align:bottom'/> Audio Recorder
 Record and playback audio
 
 ## About
