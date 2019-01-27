@@ -1,0 +1,4 @@
+start optagelse
+optag (mig|) (for|indtil) {time}
+start optagelse (af) (mig|lyd) for {time}
+optag (lyd|mig)
