@@ -13,17 +13,17 @@
 # limitations under the License.
 
 import os
-import time
-import psutil as psutil
-from os.path import dirname, exists
+import psutil
+from os.path import exists
 
 from adapt.intent import IntentBuilder
 from mycroft import MycroftSkill, intent_handler, intent_file_handler
-from mycroft.audio import wait_while_speaking, is_speaking
+from mycroft.audio import wait_while_speaking
 from mycroft.messagebus.message import Message
 from mycroft.util import record, play_wav
 from mycroft.util.parse import extract_datetime
 from mycroft.util.time import now_local
+
 
 class AudioRecordSkill(MycroftSkill):
     def __init__(self):
@@ -69,7 +69,7 @@ class AudioRecordSkill(MycroftSkill):
             try:
                 os.remove(self.settings["file_path"])
                 self.speak_dialog('audio.record.removed')
-            except:
+            except Exception:
                 pass
 
     # Standard Stop handler
@@ -118,7 +118,7 @@ class AudioRecordSkill(MycroftSkill):
         # Throw away any previous recording
         try:
             os.remove(self.settings["file_path"])
-        except:
+        except Exception:
             pass
 
         if self.has_free_disk_space():
