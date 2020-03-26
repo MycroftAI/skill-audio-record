@@ -35,11 +35,16 @@ class AudioRecordSkill(MycroftSkill):
         self.start_time = 0
         self.last_index = 24  # index of last pixel in countdowns
 
-        self.settings["min_free_disk"] = 100  # min mb to leave free on disk
-        self.settings["rate"] = 16000  # sample rate, hertz
-        self.settings["channels"] = 1  # recording channels (1 = mono)
-        self.settings["file_path"] = "/tmp/mycroft-recording.wav"
-        self.settings["duration"] = -1  # default = unknown
+        self.init_settings()
+
+    def init_settings(self):
+        # min free diskspace (MB)
+        self.settings.setdefault("min_free_disk", 100)
+        self.settings.setdefault("rate", 16000)  # sample rate, hertz
+        # recording channels (1 = mono)
+        self.settings.setdefault("channels", 1)
+        self.settings.setdefault("file_path", "/tmp/mycroft-recording.wav")
+        self.settings.setdefault("duration", -1)  # default = Unknown
 
     def remaining_time(self):
         return self.settings["duration"] - (now_local() -
