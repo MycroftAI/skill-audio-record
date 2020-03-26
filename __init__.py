@@ -12,18 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from datetime import timedelta
 import os
-import time
-import psutil as psutil
-from os.path import dirname, exists
+from os.path import exists
+import psutil
 
 from adapt.intent import IntentBuilder
 from mycroft import MycroftSkill, intent_handler, intent_file_handler
-from mycroft.audio import wait_while_speaking, is_speaking
+from mycroft.audio import wait_while_speaking
 from mycroft.messagebus.message import Message
 from mycroft.util import record, play_wav
 from mycroft.util.parse import extract_datetime
+from mycroft.util.format import nice_duration
 from mycroft.util.time import now_local
+
 
 class AudioRecordSkill(MycroftSkill):
     def __init__(self):
@@ -33,11 +35,16 @@ class AudioRecordSkill(MycroftSkill):
         self.start_time = 0
         self.last_index = 24  # index of last pixel in countdowns
 
-        self.settings["min_free_disk"] = 100  # min mb to leave free on disk
-        self.settings["rate"] = 16000  # sample rate, hertz
-        self.settings["channels"] = 1  # recording channels (1 = mono)
-        self.settings["file_path"] = "/tmp/mycroft-recording.wav"
-        self.settings["duration"] = -1  # default = unknown
+        self.init_settings()
+
+    def init_settings(self):
+        # min free diskspace (MB)
+        self.settings.setdefault("min_free_disk", 100)
+        self.settings.setdefault("rate", 16000)  # sample rate, hertz
+        # recording channels (1 = mono)
+        self.settings.setdefault("channels", 1)
+        self.settings.setdefault("file_path", "/tmp/mycroft-recording.wav")
+        self.settings.setdefault("duration", -1)  # default = Unknown
 
     def remaining_time(self):
         return self.settings["duration"] - (now_local() -
@@ -69,7 +76,7 @@ class AudioRecordSkill(MycroftSkill):
             try:
                 os.remove(self.settings["file_path"])
                 self.speak_dialog('audio.record.removed')
-            except:
+            except Exception:
                 pass
 
     # Standard Stop handler
@@ -100,16 +107,18 @@ class AudioRecordSkill(MycroftSkill):
                     self.enclosure.eyes_setpixel(self.last_index, 64, 64, 64)
                 self.last_index -= 1
 
-    ######################################################################
-    # Recording
-
     @intent_file_handler('StartRecording.intent')
     def handle_record(self, message):
+        """Handler for starting a recording."""
         utterance = message.data.get('utterance')
 
         # Calculate how long to record
         self.start_time = now_local()
-        stop_time, _ = extract_datetime(utterance, lang=self.lang)
+        # Extract time, if missing default to 30 seconds
+        stop_time, _ = (
+            extract_datetime(utterance, lang=self.lang) or
+            (now_local() + timedelta(seconds=self.settings["duration"]), None)
+        )
         self.settings["duration"] = (stop_time -
                                      self.start_time).total_seconds()
         if self.settings["duration"] <= 0:
@@ -118,11 +127,11 @@ class AudioRecordSkill(MycroftSkill):
         # Throw away any previous recording
         try:
             os.remove(self.settings["file_path"])
-        except:
+        except Exception:
             pass
 
         if self.has_free_disk_space():
-            record_for = nice_duration(self, self.settings["duration"],
+            record_for = nice_duration(self.settings["duration"],
                                        lang=self.lang)
             self.speak_dialog('audio.record.start.duration',
                               {'duration': record_for})
@@ -217,82 +226,3 @@ class AudioRecordSkill(MycroftSkill):
 
 def create_skill():
     return AudioRecordSkill()
-
-
-##########################################################################
-# TODO: Move to mycroft.util.format
-from mycroft.util.format import pronounce_number
-
-
-def nice_duration(self, duration, lang="en-us", speech=True):
-    """ Convert duration in seconds to a nice spoken timespan
-
-    Examples:
-       duration = 60  ->  "1:00" or "one minute"
-       duration = 163  ->  "2:43" or "two minutes forty three seconds"
-
-    Args:
-        duration: time, in seconds
-        speech (bool): format for speech (True) or display (False)
-    Returns:
-        str: timespan as a string
-    """
-
-    # Do traditional rounding: 2.5->3, 3.5->4, plus this
-    # helps in a few cases of where calculations generate
-    # times like 2:59:59.9 instead of 3:00.
-    duration += 0.5
-
-    days = int(duration // 86400)
-    hours = int(duration // 3600 % 24)
-    minutes = int(duration // 60 % 60)
-    seconds = int(duration % 60)
-
-    if speech:
-        out = ""
-        if days > 0:
-            out += pronounce_number(days, lang) + " "
-            if days == 1:
-                out += self.translate("day")
-            else:
-                out += self.translate("days")
-            out += " "
-        if hours > 0:
-            if out:
-                out += " "
-            out += pronounce_number(hours, lang) + " "
-            if hours == 1:
-                out += self.translate("hour")
-            else:
-                out += self.translate("hours")
-        if minutes > 0:
-            if out:
-                out += " "
-            out += pronounce_number(minutes, lang) + " "
-            if minutes == 1:
-                out += self.translate("minute")
-            else:
-                out += self.translate("minutes")
-        if seconds > 0:
-            if out:
-                out += " "
-            out += pronounce_number(seconds, lang) + " "
-            if seconds == 1:
-                out += self.translate("second")
-            else:
-                out += self.translate("seconds")
-    else:
-        # M:SS, MM:SS, H:MM:SS, Dd H:MM:SS format
-        out = ""
-        if days > 0:
-            out = str(days) + "d "
-        if hours > 0 or days > 0:
-            out += str(hours) + ":"
-        if minutes < 10 and (hours > 0 or days > 0):
-            out += "0"
-        out += str(minutes)+":"
-        if seconds < 10:
-            out += "0"
-        out += str(seconds)
-
-    return out
