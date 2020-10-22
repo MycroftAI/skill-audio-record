@@ -18,7 +18,7 @@ from os.path import exists
 import psutil
 
 from adapt.intent import IntentBuilder
-from mycroft import MycroftSkill, intent_handler, intent_file_handler
+from mycroft import MycroftSkill, intent_handler
 from mycroft.audio import wait_while_speaking
 from mycroft.messagebus.message import Message
 from mycroft.util import record, play_wav
@@ -107,7 +107,7 @@ class AudioRecordSkill(MycroftSkill):
                     self.enclosure.eyes_setpixel(self.last_index, 64, 64, 64)
                 self.last_index -= 1
 
-    @intent_file_handler('StartRecording.intent')
+    @intent_handler('StartRecording.intent')
     def handle_record(self, message):
         """Handler for starting a recording."""
         utterance = message.data.get('utterance')
@@ -186,7 +186,7 @@ class AudioRecordSkill(MycroftSkill):
     ######################################################################
     # Playback
 
-    @intent_file_handler('PlayRecording.intent')
+    @intent_handler('PlayRecording.intent')
     def handle_play(self, message):
         if exists(self.settings["file_path"]):
             # Initialize for playback
